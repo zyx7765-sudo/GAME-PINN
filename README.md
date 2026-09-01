@@ -91,8 +91,8 @@ pip install -r requirements.txt
 # 用户全局运行配置开关
 # ==============================================================================
 CURRENT_EQUATION = "1D_Burgers"        # 可选: "1D_Burgers" / "2D_Poisson" / "1D_Allen_Cahn"
-POISSON_A_PARAM = 10                   # 仅对 Poisson 有效（论文中 a=10）
-EPOCHS_PHASE1 = 12000                  # Phase 1 训练步数（论文 N₁=12000）
+POISSON_A_PARAM = 10                  
+EPOCHS_PHASE1 = 12000                  # Phase 1 训练步数
 ```
 
 ### 运行训练
