@@ -119,7 +119,7 @@ python main_pipeline.py
 ## 6. 项目文件结构
 
 ```
-你的仓库根目录/
+根目录/
 ├── README.md                    # 说明文档
 ├── requirements.txt             # 依赖清单
 ├── LICENSE                      # MIT License
