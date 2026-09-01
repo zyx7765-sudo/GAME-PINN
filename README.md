@@ -130,11 +130,9 @@ python main_pipeline.py
 ├── dataset/                     # 数据文件
 │   ├── Burgers.npz
 │   └── usol_D_0.001_k_5.mat
-└── output/                      # 输出文件
+└── output/                      # 运行时输出
     ├── error_distribution_spatial_hardness.png
-    ├── allencahn_unified_error.png
-    ├── game_pinn_burgers_epochs.npy
-    └── game_pinn_burgers_errors.npy
+    └── ... 
 ```
 
 ## 7. 许可证
