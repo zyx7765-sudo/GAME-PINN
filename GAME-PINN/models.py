@@ -1,14 +1,13 @@
 # -*- coding: utf-8 -*-
 """
 File: models.py
-Description: 统一神经网络架构底座（含时域变分触发器、多维雅可比AGM进化算子）- 泛化修复版
+Description: 统一神经网络架构底座
+             
 """
 import torch
 import torch.nn as nn
 import numpy as np
 import deepxde as dde
-
-# 移除硬编码设备，自动兼容上下文
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
@@ -69,7 +68,7 @@ class GaussianFourierFeatureTransform(nn.Module):
 
 class CombinedNet(nn.Module):
     """
-    统一核心大脑：内生【跨模态时域变分触发器 (Trigger Module)】
+    【算子本征物理模态路由与拓扑因果门控机制 (EOTR)】
     """
     regularizer = None
 
@@ -96,8 +95,8 @@ class CombinedNet(nn.Module):
         self.register_buffer('buffer_coords', torch.zeros(max_points, 2))
         self.register_buffer('buffer_S_indicator', torch.zeros(max_points, 1))
         self.current_buffer_size = 0
-        self.current_routing_mode = "BYPASS"
-        self.force_routing_lock = False  # 锁机制：防止外部因果设定被内部方差盲目覆盖
+        self.current_routing_mode = "BYPASS"   # 默认为稳态
+        self.force_routing_lock = False         # 初始为 False，以便第一次前向时允许路由判定
 
     def apply_output_transform(self, transform):
         self.output_transform = transform
@@ -123,18 +122,21 @@ class CombinedNet(nn.Module):
         return self.buffer_S_indicator[min_idx]
 
     def forward(self, x):
-        # ====== 核心判定：时域变分触发器 ======
+        # ====== 【路由判定逻辑】 ======
         if not self.force_routing_lock:
+            # 如果输入维度小于 2（纯空间问题），或者时间维度没有变化（全是 t=0 时刻），则走 BYPASS
             if x.shape[1] < 2:
                 self.current_routing_mode = "BYPASS"
             else:
-                t_potential = x[:, -1:]
-                t_var = torch.var(t_potential)
-                if t_var < 1e-5:
+                # 检测时间维的数值变化范围
+                t_col = x[:, -1:]
+                t_var = torch.var(t_col)
+                if t_var < 1e-7:  # 如果时间轴没有变化，判定为稳态快照
                     self.current_routing_mode = "BYPASS"
                 else:
                     self.current_routing_mode = "CAUSAL"
 
+        # 流形映射 → 傅里叶特征 → 物理网络
         xi = self.mapping_net(x)
         feat = self.fourier_layer(xi)
         res = self.physics_net(feat)
@@ -143,11 +145,90 @@ class CombinedNet(nn.Module):
             return self.output_transform(x, res, xi, self)
         return res
 
+    # ================================================================
+    # 算法自动算子拓扑探测
+    # ================================================================
+    def auto_detect_routing_mode(self, pde_func, x_sample_np, time_dim_index=None):
+        """
+        基于自动微分，自动计算 PDE 算子对时间导数项 u_t 的 Frobenius 范数敏感度。
+        参数:
+            pde_func: 来自 pde_library 的残差函数，签名为 pde_func(x, y, net)
+            x_sample_np: 用于探测的样本点 (numpy数组 或 Tensor)
+            time_dim_index: 时间维索引，默认取最后一维
+        返回:
+            str: "CAUSAL" 或 "BYPASS"
+        """
+        if not isinstance(x_sample_np, torch.Tensor):
+            x_sample = torch.tensor(x_sample_np, dtype=torch.float32, device=next(self.parameters()).device)
+        else:
+            x_sample = x_sample_np.to(next(self.parameters()).device)
+        
+        x_sample.requires_grad_(True)
+        original_lock_state = self.force_routing_lock
+        self.force_routing_lock = False  # 让 forward 自由探测
+        u = self(x_sample)  # shape: [N, 1]
+
+        self.force_routing_lock = original_lock_state
+ 
+        u_x = torch.autograd.grad(
+            outputs=u,
+            inputs=x_sample,
+            grad_outputs=torch.ones_like(u),
+            create_graph=True,  
+            retain_graph=True
+        )[0]  # shape: [N, dim]
+
+        if time_dim_index is None:
+            time_dim_index = x_sample.shape[1] - 1
+        u_t = u_x[:, time_dim_index:time_dim_index+1]  # shape: [N, 1]
+        R_raw = pde_func(x_sample, u, self)
+        
+        if isinstance(R_raw, (list, tuple)):
+            # 将所有残差项横向拼接，然后求整体 MSE
+            R_cat = torch.cat([r.reshape(-1, 1) for r in R_raw], dim=1)
+            loss_res = torch.mean(R_cat ** 2)
+        else:
+            R = R_raw.reshape(-1, 1)
+            loss_res = torch.mean(R ** 2)
+
+        grad_wrt_ut = torch.autograd.grad(
+            outputs=loss_res,
+            inputs=u_t,
+            retain_graph=False,    # 探测结束，立即释放计算图以节省显存
+            allow_unused=True      # 如果 u_t 未被使用，返回 None 而不报错
+        )[0]
+
+        if grad_wrt_ut is None:
+            sensitivity_norm = 0.0
+        else:
+            sensitivity_norm = torch.norm(grad_wrt_ut).item()
+
+        threshold = 1e-6
+        if sensitivity_norm < threshold:
+            detected_mode = "BYPASS"
+        else:
+            detected_mode = "CAUSAL"
+
+        self.current_routing_mode = detected_mode
+        self.force_routing_lock = True
+
+        print(f"[Auto-Router] 算子敏感度范数: {sensitivity_norm:.2e} | 判定模式: {detected_mode}")
+        return detected_mode
+
     def get_routing_and_causal_weights(self, x_raw):
+        """
+        基于局域时空演化度量 (LSEM) 的连续因果门控函数
+        """
         if self.current_routing_mode == "BYPASS":
             return torch.ones((x_raw.shape[0], 1), device=x_raw.device)
+
         t = x_raw[:, -1:]
-        weights = 1.0 + 2.0 * t
+        spatial_coords = x_raw[:, :-1]
+        lsem = self.get_residual_indicator(spatial_coords, t)
+        # 公式：w = 1.0 + exp(-alpha * (LSEM - threshold)) 或基于累计残差的包络线平滑映射
+        alpha_coeff = 5.0
+        weights = 1.0 + torch.tanh(alpha_coeff * lsem) * t
+
         weights = weights / (weights.mean() + 1e-8)
         return weights
 
@@ -175,7 +256,6 @@ class Co_AGM_Callback_Universal(dde.callbacks.Callback):
         x_raw = torch.tensor(self.model.data.train_x, dtype=torch.float32, device=device, requires_grad=True)
         y_pred = self.model.net(x_raw)
 
-        # 1. 局部物理/梯度残差缓冲区动态更新
         if self.equation_name == "1D_Allen_Cahn":
             u_x = torch.autograd.grad(y_pred.sum(), x_raw, create_graph=True)[0][:, 0:1]
             u_t = torch.autograd.grad(y_pred.sum(), x_raw, create_graph=True)[0][:, 1:2]
@@ -196,7 +276,6 @@ class Co_AGM_Callback_Universal(dde.callbacks.Callback):
         self.optimizer_map.zero_grad()
         xi = self.mapping_net(x_raw)
 
-        # 2. 泛化多维/时空网格等分布正则化计算
         dy_dx = torch.autograd.grad(y_pred.sum(), x_raw, create_graph=True)[0]
         grad_mag_uni = torch.norm(dy_dx, dim=1, keepdim=True).detach()
         omega = 1.0 + 4.0 * (grad_mag_uni / (grad_mag_uni.max() + 1e-8))
@@ -236,7 +315,6 @@ class Co_AGM_Callback_Universal(dde.callbacks.Callback):
             total_map_loss.backward()
             self.optimizer_map.step()
 
-        # 显式清理计算图悬挂，阻断显存泄漏发生
         del dy_dx, grad_mag_uni, xi, x_raw, y_pred
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
