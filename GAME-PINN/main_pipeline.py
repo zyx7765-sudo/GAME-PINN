@@ -92,8 +92,7 @@ def main():
     print(f" 正在直接加载通用物理引擎解算任务: [ {CURRENT_EQUATION} ] ")
     print("=" * 70)
 
-    geom_domain, pde_residual, expected_mode = get_pde_problem(CURRENT_EQUATION, POISSON_A_PARAM)
-
+    geom_domain, pde_residual = get_pde_problem(CURRENT_EQUATION, POISSON_A_PARAM)
     in_dim = geom_domain.dim
     out_dim = 1
 
