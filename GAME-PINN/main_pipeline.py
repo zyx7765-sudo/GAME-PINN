@@ -103,18 +103,14 @@ def main():
 
     net = CombinedNet(m_net, f_layer, p_net)
 
-    # ==================================================
-    # 📌 新增：统计并打印 GAME-PINN 总可训练参数量
-    # ==================================================
     total_params = sum(p.numel() for p in net.parameters() if p.requires_grad)
     print(f"\n[Model Architecture Info] GAME-PINN Total Trainable Parameters: {total_params:,}\n")
-    # ==================================================
+   
 
-    # 实施硬锁定，拦截 forward 内的局部微小方差对全局因果策略的无差覆盖
-    net.current_routing_mode = expected_mode
-    net.force_routing_lock = True
-
-    print(f"DEBUG: 强制路由模式已重置并锁定为: {net.current_routing_mode}")
+    sample_points = geom_domain.random_points(100)  # 采样 100 个探测点
+    net.auto_detect_routing_mode(pde_residual, sample_points)
+    # 此时 net.current_routing_mode 已自动设定，且 force_routing_lock 已置为 True
+    print(f"DEBUG: 强制路由模式已重置并锁定为: {net.auto_detect_routing_mode}")
 
     bind_hard_constraints(net, CURRENT_EQUATION)
     print(f"DEBUG: 当前绑定的 Ansatz 函数: {net.output_transform.__name__}")
@@ -271,7 +267,6 @@ def main():
             plt.savefig("poisson_visualization.png")
             plt.close()
             print("    [可视化] 绘图已保存至 poisson_visualization.png")
-
 
 
 
