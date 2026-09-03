@@ -12,7 +12,7 @@ nu = 0.01 / np.pi  # Burgers 方程粘性系数
 
 def get_pde_problem(equation_name, a_param=10):
     """
-    PDE工厂函数：一键返回对应的计算几何域、PDE残差定义算子和预期模式
+    一键返回对应的计算几何域、PDE残差定义算子和预期模式
     """
     if equation_name == "1D_Burgers":
         geom = dde.geometry.Interval(-1, 1)
@@ -32,8 +32,8 @@ def get_pde_problem(equation_name, a_param=10):
                 return res_raw * mod_factor
             return res_raw
 
-        return geomtime, pde_func, "CAUSAL"
-
+        return geomtime, pde_func
+        
     elif equation_name == "2D_Poisson":
         geom = dde.geometry.Rectangle([0, 0], [1, 1])
 
@@ -55,7 +55,7 @@ def get_pde_problem(equation_name, a_param=10):
             f_src = - (u_xx + u_yy)
             return du_xx + du_yy + f_src
 
-        return geom, pde_func, "BYPASS"
+        return geom, pde_func
 
     elif equation_name == "1D_Allen_Cahn":
         geom = dde.geometry.Interval(-1, 1)
@@ -73,7 +73,7 @@ def get_pde_problem(equation_name, a_param=10):
                 return res_raw * mod_factor
             return res_raw
 
-        return geomtime, pde_func, "CAUSAL"
+        return geomtime, pde_func
 
     else:
         raise ValueError(f"未知的物理方程类型: {equation_name}")
