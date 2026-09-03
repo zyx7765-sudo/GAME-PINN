@@ -69,7 +69,7 @@ class GaussianFourierFeatureTransform(nn.Module):
 
 class CombinedNet(nn.Module):
     """
-    统一核心大脑：内生【算子本征物理模态路由与拓扑因果门控机制 (EOTR)】
+    统一核心大脑：内生【跨模态时域变分触发器 (Trigger Module)】
     """
     regularizer = None
 
@@ -97,7 +97,7 @@ class CombinedNet(nn.Module):
         self.register_buffer('buffer_S_indicator', torch.zeros(max_points, 1))
         self.current_buffer_size = 0
         self.current_routing_mode = "BYPASS"
-        self.force_routing_lock = False
+        self.force_routing_lock = False  # 锁机制：防止外部因果设定被内部方差盲目覆盖
 
     def apply_output_transform(self, transform):
         self.output_transform = transform
@@ -123,15 +123,17 @@ class CombinedNet(nn.Module):
         return self.buffer_S_indicator[min_idx]
 
     def forward(self, x):
-        # ====== 【修改点 1】废除 Batch 方差，采用算子本征拓扑静态判定 (EOTR) ======
+        # ====== 核心判定：时域变分触发器 ======
         if not self.force_routing_lock:
-            # 如果输入维度小于 2（纯空间维），或者由外部硬锁指定为稳态，则触发 BYPASS
             if x.shape[1] < 2:
                 self.current_routing_mode = "BYPASS"
             else:
-                # 依据控制算子对时间偏导项的本征依赖性进行静态判定
-                # 时空演化方程（如 Burgers, Allen-Cahn）存在时间导数，判定为 CAUSAL
-                self.current_routing_mode = "CAUSAL"
+                t_potential = x[:, -1:]
+                t_var = torch.var(t_potential)
+                if t_var < 1e-5:
+                    self.current_routing_mode = "BYPASS"
+                else:
+                    self.current_routing_mode = "CAUSAL"
 
         xi = self.mapping_net(x)
         feat = self.fourier_layer(xi)
@@ -142,24 +144,10 @@ class CombinedNet(nn.Module):
         return res
 
     def get_routing_and_causal_weights(self, x_raw):
-        """
-        【修改点 2】基于局域时空演化度量 (LSEM) 的连续因果门控函数
-        """
         if self.current_routing_mode == "BYPASS":
             return torch.ones((x_raw.shape[0], 1), device=x_raw.device)
-
         t = x_raw[:, -1:]
-        spatial_coords = x_raw[:, :-1]
-
-        # 获取当前点的局域时空演化度量 LSEM（利用已有的缓冲区残差/梯度指示器）
-        lsem = self.get_residual_indicator(spatial_coords, t)
-
-        # 引入平滑可微的非对称时间因果变权因子
-        # 公式：w = 1.0 + exp(-alpha * (LSEM - threshold)) 或基于累计残差的包络线平滑映射
-        alpha_coeff = 5.0
-        weights = 1.0 + torch.tanh(alpha_coeff * lsem) * t
-
-        # 归一化处理，防止因权重过大导致优化器震荡
+        weights = 1.0 + 2.0 * t
         weights = weights / (weights.mean() + 1e-8)
         return weights
 
