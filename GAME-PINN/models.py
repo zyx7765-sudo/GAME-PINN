@@ -145,75 +145,42 @@ class CombinedNet(nn.Module):
             return self.output_transform(x, res, xi, self)
         return res
 
-    # ================================================================
-    # 算法自动算子拓扑探测
-    # ================================================================
-    def auto_detect_routing_mode(self, pde_func, x_sample_np, time_dim_index=None):
-        """
-        基于自动微分，自动计算 PDE 算子对时间导数项 u_t 的 Frobenius 范数敏感度。
-        参数:
-            pde_func: 来自 pde_library 的残差函数，签名为 pde_func(x, y, net)
-            x_sample_np: 用于探测的样本点 (numpy数组 或 Tensor)
-            time_dim_index: 时间维索引，默认取最后一维
-        返回:
-            str: "CAUSAL" 或 "BYPASS"
-        """
-        if not isinstance(x_sample_np, torch.Tensor):
-            x_sample = torch.tensor(x_sample_np, dtype=torch.float32, device=next(self.parameters()).device)
-        else:
-            x_sample = x_sample_np.to(next(self.parameters()).device)
-        
-        x_sample.requires_grad_(True)
-        original_lock_state = self.force_routing_lock
-        self.force_routing_lock = False  # 让 forward 自由探测
-        u = self(x_sample)  # shape: [N, 1]
-
-        self.force_routing_lock = original_lock_state
- 
-        u_x = torch.autograd.grad(
-            outputs=u,
-            inputs=x_sample,
-            grad_outputs=torch.ones_like(u),
-            create_graph=True,  
-            retain_graph=True
-        )[0]  # shape: [N, dim]
-
+    def auto_detect_routing_mode(self, x_sample_np, time_dim_index=None):
+    """
+    基于输入数据的实际时间维度变化，自动判定路由模式。
+    此方法完全规避了 DeepXDE 内部 dde.grad 计算图断裂的问题。
+    """
+    # 1. 准备数据
+    if not isinstance(x_sample_np, torch.Tensor):
+        x_sample = torch.tensor(x_sample_np, dtype=torch.float32, device=next(self.parameters()).device)
+    else:
+        x_sample = x_sample_np.to(next(self.parameters()).device)
+    
+    # 2. 判定逻辑
+    if x_sample.shape[1] < 2:
+        # 输入维度小于2，说明根本不存在时间轴
+        detected_mode = "BYPASS"
+    else:
+        # 检测时间维度的数值变化范围
         if time_dim_index is None:
-            time_dim_index = x_sample.shape[1] - 1
-        u_t = u_x[:, time_dim_index:time_dim_index+1]  # shape: [N, 1]
-        R_raw = pde_func(x_sample, u, self)
+            time_dim_index = x_sample.shape[1] - 1  # 默认取最后一维
         
-        if isinstance(R_raw, (list, tuple)):
-            # 将所有残差项横向拼接，然后求整体 MSE
-            R_cat = torch.cat([r.reshape(-1, 1) for r in R_raw], dim=1)
-            loss_res = torch.mean(R_cat ** 2)
-        else:
-            R = R_raw.reshape(-1, 1)
-            loss_res = torch.mean(R ** 2)
-
-        grad_wrt_ut = torch.autograd.grad(
-            outputs=loss_res,
-            inputs=u_t,
-            retain_graph=False,    # 探测结束，立即释放计算图以节省显存
-            allow_unused=True      # 如果 u_t 未被使用，返回 None 而不报错
-        )[0]
-
-        if grad_wrt_ut is None:
-            sensitivity_norm = 0.0
-        else:
-            sensitivity_norm = torch.norm(grad_wrt_ut).item()
-
-        threshold = 1e-6
-        if sensitivity_norm < threshold:
+        t_col = x_sample[:, time_dim_index]
+        t_var = torch.var(t_col)
+        
+        if t_var < 1e-7:
+            # 时间轴没有变化（比如全是 t=0），说明是静态快照，走 BYPASS
             detected_mode = "BYPASS"
         else:
+            # 存在时间变化，必然包含时间导数项，启用 CAUSAL
             detected_mode = "CAUSAL"
 
-        self.current_routing_mode = detected_mode
-        self.force_routing_lock = True
-
-        print(f"[Auto-Router] 算子敏感度范数: {sensitivity_norm:.2e} | 判定模式: {detected_mode}")
-        return detected_mode
+    # 3. 锁定路由，防止后续被覆盖
+    self.current_routing_mode = detected_mode
+    self.force_routing_lock = True
+    
+    print(f"[Auto-Router] 检测到输入维度: {x_sample.shape[1]}, 时间轴方差: {t_var:.2e} | 判定模式: {detected_mode}")
+    return detected_mode
 
     def get_routing_and_causal_weights(self, x_raw):
         """
