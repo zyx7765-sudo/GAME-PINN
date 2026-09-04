@@ -107,7 +107,7 @@ def main():
    
 
     sample_points = geom_domain.random_points(100)  # 采样 100 个探测点
-    net.auto_detect_routing_mode(pde_residual, sample_points)
+    net.auto_detect_routing_mode(sample_points)
     # 此时 net.current_routing_mode 已自动设定，且 force_routing_lock 已置为 True
     print(f"DEBUG: 强制路由模式已重置并锁定为: {net.auto_detect_routing_mode}")
 
